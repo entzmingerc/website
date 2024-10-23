@@ -1,265 +1,95 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ASL Oscillator Theory</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-    <header>
-        <h1>ASL Oscillator Theory</h1>
-    </header>
-    <main>
-        <article> <!-- Initial Exploration -->
-            <h2>Initial Explorations</h2>
-            <p>ASL oscillators use an ASL table with loop{} to loop a series a to() functions. Set the ASL table as an output's action
-                and then run the action. Refer to the 
-                <a href="https://github.com/monome/crow/blob/main/lua/asllib.lua">LFO</a> example in the asllib.lua file. We use Lua to create the ASL tables and pass
-                 them to the output which converts it to C. The C code sequences through the different to() calls at the right time, 
-                 handles looping (loop{}), and does the DSP of generating samples to send to DAC for the hardware outputs. C code runs 
-                 internally at 48kHz and we do not have direct access to the samples created. We can send 
-                 <a href="https://llllllll.co/t/crow-v3/46425/191">updates</a> to dyn variables 
-                 inside the ASL table from the Lua level at a stable speed of roughly 200 Hz or 0.005 seconds per update (citation needed)
-                  before crow starts sending “event queue full!”. Filling the event queue is effectively our CPU limit. 
-                  A Lua update speed of 0.005 sec per update (200Hz) has been a stable top speed for me, while the 
-                  maximum is 0.0015 sec per update (citation needed, I saw it in a Maps episode).<br><br>
-            </p>
-            <p>The oscillation happens at the C level where the ASL oscillator can freely loop back and forth to form the waveshape. 
-                Slower CV type tasks like envelopes, LFOs, sequencers, and parameter settings happen at the Lua level by updating dyn variables. 
-                Larger ASL tables with more to() stages, dynamic variables, and math functions are more computationally expensive to run on crow. 
-                Running 4 complex oscillators simultaneously can cause event queue errors, so the drumcrow models used are quite lightweight 
-                compared to what’s possible with ASL. However, crow can handle more complex ASL shapes with fewer outputs being used simultaneously. 
-                If crow is crashing, reduce Lua update speed or use simpler ASL models. Reducing update speed might reduce your maximum LFO frequency 
-                or minimum envelope decay time if you are using Lua to update dyn variables in this way.<br><br>
-            </p>
-            <p>
-                <a href="https://llllllll.co/t/drumcrow/60200">Drumcrow</a> works by setting each output to be an ASL oscillator, then runs an 
-                <a href="https://llllllll.co/t/crow-v3/46425/191">update</a> loop in Lua which applies two envelopes, 
-                one LFO, and a sequencer to the dyn variables. Galapagoose made a simple <a href="https://llllllll.co/t/crow-v3/46425/203">bass drum</a> 
-                without a Lua update loop which drastically 
-                reduces the computational load. Zebra expanded on Galapagoose’s code to make a closed 
-                <a href="https://llllllll.co/t/crow-v3/46425/230">formula for decay time</a> for the bass drum. 
-                3-foot-1 made a linear congruential generator (LCG) pseudo-white <a href="https://llllllll.co/t/crow-v3/46425/190">noise oscillator</a>. 
-                Further investigation into oscillators using 
-                Zebra’s decay time formula could reduce computation cost by replacing envelopes created with a Lua update loop or by using 
-                envelopes created with dynamic variables with mutator functions.<br><br>
-            </p>
-            <p>
-                A looped ASL table using arithmetic and mutator functions mul, step, and wrap can update dynamic variables 
-                from the C code level at the speed defined by the to() slew rate. The to() slew can be audio rate like 1/44100 seconds, 
-                which is how 3-foot-1’s LCG oscillator works. The mutator functions of a dynamic variable are 
-                <a href="https://monome.org/docs/crow/reference/#dynamic-variables">called each time</a> the 
-                dynamic variable is referenced in a single to() stage. For example, take a look at this ASL table, <br><br>
-            </p>
-            <blockquote class="center">
-                loop{ to(dyn{x=1}:step(1) + dyn{x}, 0.1, “sine”) }
-            </blockquote>
-            <p style="text-indent: 0px; text-align: center;">
-                <br>x=1, x steps by 1 to 2, add dyn{x} which triggers step(1) returning 3, output 5V.<br>
-                x=5, x steps by 1 to 6, add dyn{x} which triggers step(1) returning 7, output 13V.<br>
-                (crow will maxes out at 10V, but this illustrates how mutators work)<br><br>
-            </p>
-            <p>
-                The <a href="https://github.com/entzmingerc/drumcrow/blob/24d64573983a8b4d22d93ce13495db5d12aac969/drumcrow.lua#L132">FMStep</a> 
-                model in drumcrow uses the mutators step and wrap to create an oscillator that modulates 
-                the to() stage time inside of an ASL table directly, performing frequency modulation without needing 
-                to use a Lua update loop. Looping ASL tables with mutating dynamic variables provide a great way to 
-                make complex waveshapes. This style of synthesis is very similar to <a href="https://llllllll.co/t/bytebeats-a-beginner-s-guide/16491">bytebeat</a> 
-                but with some key differences, 
-                namely the dynamic variables are mutated each time they’re referenced, the to() slew time can be modulated, 
-                and a selection of different CV shaping functions. One promising direction for creating complex ASL 
-                oscillators is to translate bytebeat to ASL. A bytebeat oscillator (t + 1) will increment t until t hits 
-                a maximum value and wraps around, thus creating a sawtooth waveform. This function can be translated to ASL, 
-                but the sample rate can be adjusted using a dynamic variable, enabling this “bytebeat waveshape” to be 
-                played chromatically as follows,<br><br>
-            </p>
-            <blockquote class="center">
-                loop{ to(dyn{t=1}:step(1):wrap(0,10), dyn{cyc}, “now”) }
-            </blockquote>
-            <p>
-                <br>These same techniques are also available for norns scripting using crow.<br><br>
-            </p>
-            <h2>Hardware Constraints</h2>
-            <p>
-                Dyn mutator functions, ASL math, and ASL stages evaluate at C speed 48kHz. 
-                Lua can update dyn variables as fast as 200Hz for stable operation of 4 oscillators, but probably faster for a less complex set of outputs. 
-                Crow CV inputs read at an upper rate of 1.5 kHz or 0.000667 sec per read. 
-                Crow CV outputs at an upper rate of 48 kHz or 0.00002084 sec per output. 
-                Crow can’t update ASL tables faster than every 32 samples, which is roughly 1.5kHz. 
-                Larger ASL tables take time to create, set, and run on outputs, so quickly changing between ASL tables for an output introduces discontinuities in the audio. 
-                Anything you want to do with an output in Crow is built using an ASL table. 
-                The function time() is limited to 1 ms intervals. 
-                The Crow ADC is 16bit and has 4~5(?) LSBs of noise. 
-                The function math.rand() uses stm32’s internal analog random number generator feeding an LCG. 
-            </p>
-            <h2>Lua Tricks</h2>
-            <p>
-                Updaters are anything written in Lua that update variables in the ASL table. The output shapes of the updaters have a sampling rate as well, 
-                depending on how fast the while loop executes, how fast the clock is retriggered, and so on. Drivers are used to create the updaters that 
-                set the dynamic variables. Just some funny lingo I made up for me to categorize things in my head and figure out what’s possible depending 
-                on the shapes of the systems involved. The “sampling rate” of drivers can be variable. Updaters updating Drivers driving Updaters.
-                <br>
-                <br><b>Drivers</b>: metro, clock, while loop, input[1]{mode=’stream’, time=0.0015 minimum}, and delay
-                <br><b>Updaters</b>: ENVs, LFOs, Sequins, with any sort of shape, cycle time, stages, retriggering, slew, noise, phase accumulation, stage delay, and so on. 
-            </p>
-            <h2>Best Practices</h2>
-            <p>
-                Process oscillator waveforms using ASL when possible (~48kHz). 
-                Create slower CV modulations / updaters with Lua (~200Hz) (ENV, LFO, Sequences). 
-                Using multiple outputs on crow requires less complex ASL tables due to RAM constraints and event queue overflows. Instability can happen when we update ASL tables with Lua too often. 
-                <br>
-                <br><b>ASL Bytebeat Template</b>: 
-            </p>
-            <blockquote class="center">
-                loop{ to( &lt;bytebeat equation&gt; * amp, cyc, shape) }
-            </blockquote>    
-            <p>
-                <ul>
-                    <li>amp = VCA, something like 0 to 1, scales amplitude.</li>
-                    <li>cyc = sample rate (usually bytebeat sample rate is 8kHz, 16kHz, etc.)</li>
-                    <li>shape = ‘now’ for authentic digital, but could be any shape for different tones</li>
-                    <li>dyn{t=0}:step(1):wrap(0,255) would be “8 bits” but crow can only go +10V
-                        <br>dyn{t=0}:step(1/25.5):wrap(0, 10) -- or
-                        <br>dyn{t=0}:step(1/25.5):wrap(-5, 5) -- gets rid of “DC offset”
-                    </li>
-                </ul>
-            </p>
-            <table>
-                <tr>
-                    <th>ASL Table</th>
-                    <th>Math Equation</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}</th>
-                    <th>y = 0</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}:step(0.1)</th>
-                    <th>y = 0, 0.1, 0.2, 0.3, … infinity</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}:step(0.1):wrap(0,1)</th>
-                    <th>y = x (10 steps, 0 to 1)</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}:step(0.01):wrap(0,1) </th>
-                    <th>y = x (100 steps, 0 to 1)</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}step(-0.01):wrap(0,1)</th>
-                    <th>y = 1 - x (descend from 1 to 0)</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}step(-0.01):wrap(0,1) * dyn{x=0}</th>
-                    <th>y = (1 - x) * (1 - x) = 1 - 2x - x^2</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}step(0.01):wrap(0,1) * dyn{x=0}</th>
-                    <th>y = x^2</th>
-                </tr>
-                <tr>
-                    <th>dyn{x=0}step(0.01):wrap(0,1) * dyn{x=0} + 1</th>
-                    <th>y = x^2 + 1</th>
-                </tr>
-                <tr>
-                    <th>1 - dyn{x=0}step(0.01):wrap(0,1) * dyn{x=0}</th>
-                    <th>y = 1 - x^2</th>                
-                </tr>
-                <tr>
-                    <th>-0.5 * dyn{x=0}step(0.01):wrap(0,1) * dyn{x=0}</th>
-                    <th>y = -0.5x * x</th>                
-                </tr>
-                <tr>
-                    <th>dyn{x1=0}:step(0.01):wrap(0,1) + -0.5 * dyn{x2=0}step(0.01):wrap(0,1) * dyn{x2=0}</th>
-                    <th>y = x1 + -0.5x2^2</th>                
-                </tr>
-                <tr>
-                    <th>dyn{x=0}:step(0.314):wrap(-3.14,3.14) * 0.101321 * dyn{x=0} * dyn{x=0} * dyn{x=0}</th>
-                    <th>y = sin(x) ish root-product approximation for -3.14 to 3.14</th>                
-                </tr>
-            </table>
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE-edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Personal Website</title>
+        <link rel="stylesheet" href="styles.css">
+    </head>
+    <body>
+        <div id="header">
+            <div class="container">            
+                <nav>
+                    <h1>Cameron Entzminger</h1>
+                    <ul>
+                        <li><a href="index.html">Home</a></li>
+                        <li><a href="https://github.com/entzmingerc/nb_drumcrow">nb_drumcrow</a></li>
+                        <li><a href="https://github.com/entzmingerc/pit-orchisstra">pit orchisstra</a></li>
+                        <li><a href="ASLOscillatorTheory.html">ASL Theory</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+        <main>
 
-            <h2>References and Usernames</h2>
-            <ul>
-                <li><a href="https://llllllll.co/t/drumcrow/60200">Drumcrow script, postsolarpunk</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/109">Crow as an oscillator, controlling VCA, and triggering a noise sample, Infinite Digits </a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/112">Oscillators using to() and different shapes, Jaseknighter</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/168">Teletype updating Dyn variables, Justmat</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/184">LCG random number generator 1, 3-foot-1</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/190">LCG RNG, more stable, 3-foot-1</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/187">LCG discussion and crow specific tips from Galapagoose</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/189">LCG 16bit algorithms from Zebra</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/203">Bass drum entirely in ASL, no lua update loop, Galapagoose</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/208">Bass drum entirely in ASL, no lua update loop, 3-foot-1</a></li>
-                <li><a href="https://llllllll.co/t/crow-v3/46425/230">Closed formula for decay time! Super cool!! Zebra</a></li>
-                <li><a href="https://github.com/monome/crow/blob/main/lua/asllib.lua">Example of ASL functions</a></li>
-                <li><a href="https://github.com/monome/crow/blob/main/lua/asl.lua">How ASL works at Lua level</a></li>
-                <li><a href="https://github.com/monome/crow/blob/main/lib/casl.c">How ASL works at C level</a></li>
-                <li><a href="https://github.com/monome/crow/blob/main/lib/lualink.c">How Lua & C communicate</a></li>
-                <li><a href="https://monome.org/docs/crow/reference/">Crow scripting reference</a></li>
-                <li><a href="https://llllllll.co/t/bytebeats-a-beginner-s-guide/16491">Bytebeat, A Beginner’s Guide, NightMachines</a></li>
-                <li><a href="http://countercomplex.blogspot.com/2011/10/some-deep-analysis-of-one-line-music.html">Bytebeat, "Some deep analysis of one-line music programs.", Viznut</a></li>
-                <li><a href="http://countercomplex.blogspot.com/2011/10/algorithmic-symphonies-from-one-line-of.html">Bytebeat, "Algorithmic symphonies from one line of code -- how and why?", Viznut</a></li>
-                <li><a href="https://stackoverflow.com/questions/2982729/is-it-possible-to-implement-bitwise-operators-using-integer-arithmetic">Lua Bitwise OPs</a></li>
-            </ul>
-        </article>
+            <!-- ---------- about ---------- -->
+            <div id="about">
+                <div id="container">
+                    <div class="row">
+                        <div class="about-col-1">
+                            <img src="images/cameron.png" alt="that's me!">
+                        </div>
+                        <div class="about-col-2">
+                            <h1>About Me</h1>
+                            <p>
+                                I'm an engineer and musician. I enjoy teaching others how to make circuits and sounds. I've got a BS in Computer Engineering and a PhD in Electrical Engineering. My dissertation  
+                                focused on real-time thermal modeling of SiC MOSFET power modules. I developed a technique which used reduced order thermal models and package surface 
+                                temperature to identify faults in solder layers of power modules. On the music front, I've developed a script which turns a Monome Crow into a 4-voice synthesizer. 
+                                I've also created a muscial sequencer app called Pit Orchisstra for Monome Norns based on the classic Snake game. 
+                                My research work has been published in IEEE Journal on Power Electronics and my music has been released on a couple smaller record labels. In the past, I've worked
+                                at a national research lab, renewable energy developer, and tech companies. 
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-        <article> <!-- ASL Oscillator Models -->
-            <h2>ASL Oscillator Models</h2>
-            <blockquote class="list">function var_saw(shape)<br>
-                return loop { to(  dyn{amp=2}, dyn{cyc=1/440} * dyn{pw=1/2}, shape), to(0-dyn{amp=2}, dyn{cyc=1/440} * (1-dyn{pw=1/2}), shape) }<br>
-                end	
-            </blockquote>
-            <blockquote class="list">
-                function bytebeat(shape)
-                return loop { to(dyn{x=1}:step(dyn{pw=1}):wrap(-20,20) * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function noise(shape)
-                return loop { to(dyn{x=1}:mul(dyn{pw2=1}):step(dyn{pw=1}):wrap(-10,10) * dyn{amp=2}, dyn{cyc=1}/2, shape) } 
-                end
-            </blockquote>
-            <blockquote class="list">
-                function FMstep(shape) 
-                return loop { 
-                to(  dyn{amp=2}, dyn{x=1}:step(dyn{pw2=1}):wrap(1,2) * dyn{cyc=1} * dyn{pw=1}, shape),
-                to(0-dyn{amp=2}, dyn{x=1} * dyn{cyc=1} * (1-dyn{pw=1}), shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function ASLsine(shape)
-                return loop { to((dyn{x=0}:step(dyn{pw=0.314}):wrap(-3.14,3.14) + 0.101321 * dyn{x=0} * dyn{x=0} * dyn{x=0}) * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function ASLharmonic(shape)
-                return loop { to((dyn{x=0}:step(dyn{pw=1}):mul(-1):wrap(-3.14,3.14) + 0.101321 * dyn{x=0} * dyn{x=0} * dyn{x=0}) * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function bytebeat2(shape)
-                return loop { to(dyn{x=0}:step(dyn{pw2=1}):wrap(-20,20) * dyn{x=0} * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function bytebeat3(shape)
-                return loop{to( dyn{x=0}:step(dyn{pw=1}):wrap(-20,20) * dyn{x=0} % dyn{pw2=1} * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function bytebeat4(shape)
-                return loop{to( dyn{x=0}:step(dyn{pw=1}):wrap(-20,dyn{bit=10}) * dyn{x=0} % dyn{pw2=1} * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-            <blockquote class="list">
-                function bytebeat5(shape)
-                return loop{to( (dyn{t=0}:step(dyn{pw=0.1}):wrap(0, 10) % 5 + dyn{t=0}:step(dyn{pw2=0.1}):wrap(0, 10) % dyn{bit=1}) * dyn{amp=2}, dyn{cyc=1}, shape) }
-                end
-            </blockquote>
-        </article>
-    </main>
-    <footer>ASL Oscillator Theory</footer>
-</body>
+            <!-- ---------- Skills ---------- -->
+            <div id="skills">
+                <div id="container">
+                    <div class="row">
+                        <div class="skills-col-1">                            
+                            <h1>Skills</h1>
+                            <p>
+                                MATLAB, Simulink, Lua, Python, COMSOL, Ansys, Technical Writing, Supercollider, Sound Design, LabVIEW, Mathematics, Circuit Analysis, Teaching, PyTorch
+                            </p>
+                        </div>
+                        <div class="skills-col-2">
+                            <img src="images/rudiments.png" alt="rudiments norns script">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ---------- Publications ---------- -->
+            <div id="publications">
+                <div id="container">                          
+                    <h1>Publications</h1>
+                    <ul>
+                        <li>C. Entzminger, W. Qiao, L. Qu and J. L. Hudgins, "Automated Extraction of Low-Order Thermal Model with Controllable Error Bounds for SiC MOSFET Power Modules," in IEEE Transactions on Power Electronics, vol. 39, no. 1, pp. 538-551, Jan. 2024, doi: 10.1109/TPEL.2023.3318580.</li>
+                        <li>C. Entzminger, W. Qiao, L. Qu, “Case temperature monitoring-based online condition monitoring of SiC MOSFET power modules using a radial basis function network,” in Proc. IEEE Energy Conversion Congress & Expo., Oct. 2020.</li>
+                        <li>C. Entzminger, W. Qiao, L. Qu, and J. Hudgins, “A high-accuracy, low order thermal model of SiC MOSFET power modules extracted from finite element analysis via model order reduction,” in Proc. IEEE Energy Conversion Congress & Expo., Sept.-Oct. 2019, pp. 4950-4954.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- ---------- Projects ---------- -->
+            <div id="projects">
+                <div id="container">                          
+                    <h1>Projects and Performances</h1>
+                    <ul>
+                        <li><a href="https://github.com/entzmingerc/nb_drumcrow">nb_drumcrow — a norns mod that turns crow into a 4-voice synthesizer</a></li>
+                        <li><a href="https://github.com/entzmingerc/pit-orchisstra">pit orchisstra — a musical sequencer based on the classic Snake game</a></li>
+                        <li><a href="https://github.com/entzmingerc/drumcrow">drumcrow — previous version of nb_drumcrow</a></li>
+                        <li><a href="https://www.youtube.com/watch?v=3UIbLaA7vt8">Live coding drumcrow, RAVE, and Hydra</a></li>
+                        <li><a href="https://www.youtube.com/watch?v=hvPSVOyGsYg">Performance of heavily modified version of rudiments for Blue Moon Triptych</a></li>
+                        <li><a href="https://www.youtube.com/watch?v=_EKpT1tO02o">Live coding drumcrow for Flash Crash</a></li>
+                        <li><a href="https://www.youtube.com/watch?v=JCROoHOaM4w">52 minutes of deluge sketches</a></li>
+                    </ul>
+                </div>
+            </div>
+        </main>
+        <footer><a href="index.html">Cameron Entzminger</a></footer>
+    </body>
 </html>
